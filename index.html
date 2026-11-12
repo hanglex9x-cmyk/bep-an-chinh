@@ -1014,15 +1014,18 @@ function renderTongHop(){
 }
 
 /* ---------- CHỨNG TỪ & BÁO CÁO ---------- */
+/* id = đúng mã loai backend chấp nhận (08_BaoCao.gs): cham_cong, thu_tien_an,
+   bang_ke_mua_tp, doi_chieu_giao_nhan, tong_hop_chi_phi, bang_ke_bu, hop_dong.
+   LƯU Ý 12/11: id cũ (bcc/thu_tien/bang_ke_tp/gn/tong_hop/hdkt/tl) backend báo
+   'Loai bao cao khong hop le' nên không in được chứng từ nào. */
 const DOCS = [
-  {id:'bcc', label:'Bảng chấm công (BCC)', desc:'Chấm công NV theo ngày trong tháng'},
-  {id:'thu_tien', label:'Thu tiền ăn', desc:'Biên lai thu tiền ăn NV + khách'},
-  {id:'bang_ke_tp', label:'Bảng kê mua thực phẩm', desc:'Tổng hợp mua TP theo tháng'},
-  {id:'gn', label:'Bảng đối chiếu giao nhận', desc:'Giao nhận thực phẩm theo nhóm'},
-  {id:'tong_hop', label:'Tổng hợp chi phí', desc:'Suất ăn, thu, chi phí, bù'},
+  {id:'cham_cong', label:'Bảng chấm công (BCC)', desc:'Chấm công NV theo ngày trong tháng'},
+  {id:'thu_tien_an', label:'Thu tiền ăn', desc:'Biên lai thu tiền ăn NV + khách'},
+  {id:'bang_ke_mua_tp', label:'Bảng kê mua thực phẩm', desc:'Tổng hợp mua TP theo tháng'},
+  {id:'doi_chieu_giao_nhan', label:'Bảng đối chiếu giao nhận', desc:'Giao nhận thực phẩm theo nhóm'},
+  {id:'tong_hop_chi_phi', label:'Tổng hợp chi phí', desc:'Suất ăn, thu, chi phí, bù'},
   {id:'bang_ke_bu', label:'Bảng kê bù (HĐ bù tiếp khách)', desc:'Chi phí tiếp khách cần công ty bù'},
-  {id:'hdkt', label:'Hợp đồng kinh tế (HĐKT)', desc:'Hợp đồng với bên B (Tak Long)'},
-  {id:'tl', label:'Thanh lý hợp đồng (TL)', desc:'Thanh lý HĐKT'},
+  {id:'hop_dong', label:'Hợp đồng kinh tế & Thanh lý (HĐKT/TL)', desc:'Hợp đồng với bên B (Tak Long) + thanh lý'},
 ];
 function renderChungTu(){
   $('#docList').innerHTML = DOCS.map(d=>`<div class="doc-item"><div><b>${esc(d.label)}</b><div class="muted">${esc(d.desc)}</div></div><div style="display:flex;gap:8px;flex:none"><button class="btn secondary" onclick="previewDoc('${d.id}')">Xem trước</button><button class="btn" onclick="printDoc('${d.id}')">In</button><button class="btn secondary" onclick="csvDoc('${d.id}')">CSV</button></div></div>`).join('');
@@ -1046,7 +1049,16 @@ window.csvDoc = async function(id){
   if(!needApi()){ alert('Chưa kết nối máy chủ — đang chờ cấu hình.'); return; }
   try{
     const d = await api('getBaoCao',{ky_id:state.kyId, loai:id});
-    const rows = d.rows || d.data || [];
+    let rows = d.rows || d.data || [];
+    if(!rows.length && (d.hdkt || d.tl || d.bang_ke)){
+      rows = [].concat((d.hdkt||[]).map(r=>({nhom:'HDKT', ...r})))
+        .concat((d.tl||[]).map(r=>({nhom:'TL', ...r})))
+        .concat((d.bang_ke||[]).map(r=>({nhom:'BANG_KE', ...r})));
+    }
+    if(!rows.length && d.tong_chi_phi !== undefined){
+      rows = Object.keys(d).filter(k=>d[k]!==null && typeof d[k]!=='object').map(k=>({chi_tieu:k, gia_tri:d[k]}));
+      if(d.chi_phi_khac) Object.keys(d.chi_phi_khac).forEach(k=>rows.push({chi_tieu:'chi_phi_khac.'+k, gia_tri:d.chi_phi_khac[k]}));
+    }
     if(!rows.length){ alert('Không có dữ liệu cho chứng từ này.'); return; }
     const keys = Object.keys(rows[0]);
     const csv = [keys.join(',')].concat(rows.map(r=>keys.map(k=>'"'+String(r[k]??'').replace(/"/g,'""')+'"').join(','))).join('\n');
@@ -1055,15 +1067,60 @@ window.csvDoc = async function(id){
     a.download = `${id}_${state.kyId||'ky'}.csv`; a.click();
   }catch(ex){ alert('Lỗi: '+ex.message); }
 };
+function docFoot(){
+  const ch = (state.init && state.init.cau_hinh) || {};
+  const lb = ch.lap_bieu || (state.init && state.init.lap_bieu) || '';
+  const tp = ch.truong_phong || (state.init && state.init.truong_phong) || '';
+  return `<p style="margin-top:24px;display:flex;justify-content:space-between"><span>Người lập biểu<br><b>${esc(lb)}</b></span><span>Trưởng phòng<br><b>${esc(tp)}</b></span></p>`;
+}
+function rowsTable(rows){
+  const keys = Object.keys(rows[0]);
+  return '<table><thead><tr>' + keys.map(x=>`<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r=>'<tr>'+keys.map(x=>`<td>${esc(typeof r[x]==='object'&&r[x]!==null?JSON.stringify(r[x]):r[x])}</td>`).join('')+'</tr>').join('') + '</tbody></table>';
+}
 function buildDocHtml(id, d){
   const k = state.ky;
   const head = `<h2>${esc((DOCS.find(x=>x.id===id)||{}).label||id)}</h2><p style="text-align:center">Công ty TNHH Cao su Bình Phước Kratie I — Phòng TC LĐTL<br>Kỳ ${k?esc(k.thang)+'/'+esc(k.nam):esc(state.kyId||'')}</p>`;
+  // Hop dong: HĐKT + TL + Bang ke la 3 mang rieng, khong co d.rows
+  if(d.loai==='hop_dong' || id==='hop_dong'){
+    const sec = (title, arr, tong)=>{
+      if(!arr || !arr.length) return `<h3>${esc(title)}</h3><p>Không có dữ liệu.</p>`;
+      return `<h3>${esc(title)}</h3>` + rowsTable(arr) + `<p><b>Tổng: ${fmt(tong)}</b></p>`;
+    };
+    return head + sec('Hợp đồng kinh tế (HĐKT)', d.hdkt, d.tong_hdkt)
+      + sec('Thanh lý hợp đồng (TL)', d.tl, d.tong_tl)
+      + sec('Bảng kê', d.bang_ke, d.tong_bang_ke)
+      + (d.ghi_chu ? `<p class="muted">${esc(d.ghi_chu)}</p>` : '') + docFoot();
+  }
+  // Tong hop chi phi: doi tuong phang, khong co d.rows
+  if(d.loai==='tong_hop_chi_phi' || id==='tong_hop_chi_phi'){
+    const kv = [['Tổng chi phí', d.tong_chi_phi],['Thu NV', d.thu_nv],['Thu khách', d.thu_khach],['Hỗ trợ công ty', d.ho_tro],['Công ty bù', d.cong_ty_bu],['Tổng công NV', d.tong_cong_nv],['Tổng công khách', d.tong_cong_khach],['A Đưởng (VNĐ)', d.a_duong_vnd],['A Đưởng (Riel)', d.a_duong_riel],['Chị Mai (Riel)', d.chi_mai_riel],['Số dòng chi phí', d.so_dong_chi_phi]];
+    let h = head + '<table><tbody>' + kv.map(([a,b])=>`<tr><td>${esc(a)}</td><td style="text-align:right"><b>${fmt(b)}</b></td></tr>`).join('') + '</tbody></table>';
+    if(d.chi_phi_khac){
+      h += '<h3>Chi phí khác</h3><table><tbody>' + Object.keys(d.chi_phi_khac).map(x=>`<tr><td>${esc(x)}</td><td style="text-align:right"><b>${fmt(d.chi_phi_khac[x])}</b></td></tr>`).join('') + '</tbody></table>';
+    }
+    if(d.ghi_chu_doi_soat) h += `<p class="muted">Ghi chú đối soát: ${esc(d.ghi_chu_doi_soat)}</p>`;
+    return h + docFoot();
+  }
+  // Cham cong: luoi ngay 1..31 (d.rows[].ngay la object ngay->ky hieu)
+  if(d.loai==='cham_cong' || id==='cham_cong'){
+    const rows = d.rows || [];
+    if(!rows.length) return head + '<p>Không có dữ liệu.</p>';
+    const dim = k ? new Date(k.nam, k.thang, 0).getDate() : 31;
+    let h = head + '<table><thead><tr><th>NV</th>';
+    for(let day=1; day<=dim; day++) h += `<th>${day}</th>`;
+    h += '<th>Tổng công</th></tr></thead><tbody>';
+    rows.forEach(r=>{
+      h += `<tr><td>${esc(r.ho_ten||r.nv_id||'')}</td>`;
+      for(let day=1; day<=dim; day++) h += `<td style="text-align:center">${esc((r.ngay||{})[String(day).padStart(2,'0')]||'')}</td>`;
+      h += `<td style="text-align:right"><b>${fmt(r.tong_cong)}</b></td></tr>`;
+    });
+    h += `</tbody></table><p><b>Tổng công NV: ${fmt(d.tong_cong_nv)}</b></p>`;
+    return h + docFoot();
+  }
   const rows = d.rows || d.data || [];
   if(!rows.length) return head + '<p>Không có dữ liệu.</p>';
-  const keys = Object.keys(rows[0]);
-  return head + '<table><thead><tr>' + keys.map(x=>`<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>' +
-    rows.map(r=>'<tr>'+keys.map(x=>`<td>${esc(r[x])}</td>`).join('')+'</tr>').join('') + '</tbody></table>' +
-    `<p style="margin-top:24px;display:flex;justify-content:space-between"><span>Người lập biểu<br><b>${esc((state.init&&state.init.lap_bieu)||'')}</b></span><span>Trưởng phòng<br><b>${esc((state.init&&state.init.truong_phong)||'')}</b></span></p>`;
+  return head + rowsTable(rows) + docFoot();
 }
 
 /* ---------- Khởi động ---------- */
